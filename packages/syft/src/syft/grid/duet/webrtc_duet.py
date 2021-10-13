@@ -43,12 +43,12 @@ from ...core.node.domain.domain import Domain
 from ...logger import error
 from ...logger import traceback_and_raise
 from ..connections.webrtc import WebRTCConnection
-from ..duet.signaling_client import SignalingClient
 from ..services.signaling_service import AnswerPullRequestMessage
 from ..services.signaling_service import InvalidLoopBackRequest
 from ..services.signaling_service import OfferPullRequestMessage
 from ..services.signaling_service import SignalingAnswerMessage
 from ..services.signaling_service import SignalingOfferMessage
+from .signaling_client import SignalingClient
 
 
 class Duet(DomainClient):
@@ -315,15 +315,18 @@ class Duet(DomainClient):
         except Exception as e:
             traceback_and_raise(e)
 
-    def _update_availability(self) -> bool:
+    def _update_availability(self) -> bool:  # type: ignore[return]
         """Method used to check if the signaling process is over.
         :return: Boolean flag, True if it's NOT over, and False if it's over.
         :rtype: Boolean
         """
+        available = False
         try:
-            return (
+            available = (
                 not self._pull_msg_queue.empty()
                 and self.connection.peer_connection is not None
             )
         except Exception as e:
             traceback_and_raise(e)
+
+        return available

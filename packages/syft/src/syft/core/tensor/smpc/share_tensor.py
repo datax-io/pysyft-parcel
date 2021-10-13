@@ -18,12 +18,12 @@ from google.protobuf.reflection import GeneratedProtocolMessageType
 import numpy as np
 import torch
 
-# syft absolute
-from syft.core.common.serde.deserialize import _deserialize as deserialize
-from syft.core.common.serde.serializable import serializable
-from syft.core.common.serde.serialize import _serialize as serialize
-from syft.core.tensor.passthrough import PassthroughTensor
-from syft.proto.core.tensor.share_tensor_pb2 import ShareTensor as ShareTensor_PB
+# relative
+from ....proto.core.tensor.share_tensor_pb2 import ShareTensor as ShareTensor_PB  # type: ignore
+from ...common.serde.deserialize import _deserialize as deserialize
+from ...common.serde.serializable import serializable
+from ...common.serde.serialize import _serialize as serialize
+from ..passthrough import PassthroughTensor  # type: ignore
 
 METHODS_FORWARD_ALL_SHARES = {
     "repeat",
@@ -38,10 +38,9 @@ METHODS_FORWARD_ALL_SHARES = {
     "reshape",
     "squeeze",
     "swapaxes",
+    "__pos__",
 }
-INPLACE_OPS = {
-    "resize",
-}
+INPLACE_OPS = {"resize", "put"}
 
 
 @serializable()
@@ -50,7 +49,7 @@ class ShareTensor(PassthroughTensor):
         self,
         rank: int,
         nr_parties: int,
-        ring_size: int = 2 ** 64,
+        ring_size: int = 2 ** 32,
         value: Optional[Any] = None,
     ) -> None:
         self.rank = rank
@@ -78,7 +77,7 @@ class ShareTensor(PassthroughTensor):
     @lru_cache(32)
     def compute_min_max_from_ring(ring_size: int = 2 ** 64) -> Tuple[int, int]:
         min_value = (-ring_size) // 2
-        max_value = (ring_size - 1) // 2
+        max_value = ring_size // 2 - 1
         return min_value, max_value
 
     """ TODO: Remove this -- we would use generate_przs since the scenario we are testing is that
@@ -126,14 +125,14 @@ class ShareTensor(PassthroughTensor):
     @staticmethod
     def generate_przs(
         value: Optional[Any],
-        shape: Tuple[int],
+        shape: Tuple[int, ...],
         rank: int,
         nr_parties: int,
         seed_shares: int,
     ) -> "ShareTensor":
 
-        # syft absolute
-        from syft.core.tensor.tensor import Tensor
+        # relative
+        from ..tensor import Tensor
 
         if value is None:
             value = Tensor(np.zeros(shape, dtype=np.int32))  # TODO: change to np.int64
@@ -316,7 +315,10 @@ class ShareTensor(PassthroughTensor):
         Returns:
             ShareTensor: Result of the operation.
         """
-        ShareTensor.sanity_checks(y)
+        if isinstance(y, ShareTensor):
+            raise ValueError("Private matmul not supported yet")
+
+        ShareTensor.sanity_check(y)
         new_share = self.apply_function(y, "matmul")
         return new_share
 
@@ -329,8 +331,53 @@ class ShareTensor(PassthroughTensor):
         Returns:
             ShareTensor. Result of the operation.
         """
-        ShareTensor.sanity_checks(y)
-        return y.matmul(self)
+        if isinstance(y, ShareTensor):
+            raise ValueError("Private matmul not supported yet")
+
+        ShareTensor.sanity_check(y)
+        new_share = y.apply_function(self, "matmul")
+        return new_share
+
+    def __eq__(self, other: Any) -> bool:
+        """Equal operator.
+
+        Check if "self" is equal with another object given a set of
+            attributes to compare.
+
+        Args:
+            other (Any): Value to compare.
+
+        Returns:
+            bool: True if equal False if not.
+
+        """
+        # relative
+        from .... import Tensor
+
+        if (
+            isinstance(self.child, Tensor)
+            and isinstance(other.child, Tensor)
+            and (self.child != other.child).child.any()  # type: ignore
+        ):
+            return False
+
+        if (
+            isinstance(self.child, np.ndarray)
+            and isinstance(other.child, np.ndarray)
+            and (self.child != other.child).any()
+        ):
+            return False
+
+        if self.rank != other.rank:
+            return False
+
+        if self.ring_size != other.ring_size:
+            return False
+
+        if self.nr_parties != other.nr_parties:
+            return False
+
+        return True
 
     # TRASK: commenting out because ShareTEnsor doesn't appear to have .session_uuid or .config
     # def div(
@@ -398,7 +445,7 @@ class ShareTensor(PassthroughTensor):
 
     def __getattribute__(self, attr_name: str) -> Any:
 
-        if attr_name in METHODS_FORWARD_ALL_SHARES:
+        if attr_name in METHODS_FORWARD_ALL_SHARES or attr_name in INPLACE_OPS:
             return ShareTensor.hook_method(self, attr_name)
 
         return object.__getattribute__(self, attr_name)
