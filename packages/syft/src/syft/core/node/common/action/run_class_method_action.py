@@ -10,11 +10,10 @@ from google.protobuf.reflection import GeneratedProtocolMessageType
 from nacl.signing import VerifyKey
 
 # syft absolute
-from syft.core.plan.plan import Plan
+import syft as sy
 
 # relative
 from ..... import lib
-from ..... import serialize
 from .....logger import critical
 from .....logger import traceback_and_raise
 from .....logger import warning
@@ -22,7 +21,6 @@ from .....proto.core.node.common.action.run_class_method_pb2 import (
     RunClassMethodAction as RunClassMethodAction_PB,
 )
 from .....util import inherit_tags
-from ....common.serde.deserialize import _deserialize
 from ....common.serde.serializable import serializable
 from ....common.uid import UID
 from ....io.address import Address
@@ -147,6 +145,7 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
             upcasted_kwargs,
         ) = lib.python.util.upcast_args_and_kwargs(resolved_args, resolved_kwargs)
 
+        resolved_self_previous_bytes: Optional[bytes] = None
         if self.is_static:
             result = method(*upcasted_args, **upcasted_kwargs)
         else:
@@ -155,7 +154,13 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
                     ValueError(f"Method {method} called, but self is None.")
                 )
 
+            resolved_self_previous_bytes = sy.serialize(
+                resolved_self.data, to_bytes=True
+            )
             method_name = self.path.split(".")[-1]
+
+            # relative
+            from ....plan.plan import Plan
 
             if (
                 isinstance(resolved_self.data, Plan)
@@ -225,6 +230,17 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
                     err = f"Unable to set id on result {type(result)}. {e}"
                     traceback_and_raise(Exception(err))
 
+        # check if resolved_self has changed and if so mark as mutating_internal
+        # this prevents someone from mutating an object they own with something they
+        # do not own and the read_permissions not flowing backwards
+        if (
+            resolved_self_previous_bytes is not None
+            and resolved_self is not None
+            and resolved_self_previous_bytes
+            != sy.serialize(resolved_self.data, to_bytes=True)
+        ):
+            mutating_internal = True
+
         if mutating_internal:
             if isinstance(resolved_self, StorableObject):
                 resolved_self.read_permissions = result_read_permissions
@@ -243,6 +259,13 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
             kwargs=tag_kwargs,
         )
 
+        # if we have mutated resolved_self we need to save it back since the store
+        # might be in SQL and not in memory where the update is automatic
+        # but if the method was static then we might not have a _self
+        if resolved_self is not None and mutating_internal:
+            # write the original resolved_self back to _self.id_at_location
+            node.store[self._self.id_at_location] = resolved_self  # type: ignore
+
         node.store[self.id_at_location] = result
 
     def _object2proto(self) -> RunClassMethodAction_PB:
@@ -256,19 +279,19 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
         :rtype: RunClassMethodAction_PB
 
         .. note::
-            This method is purely an internal method. Please use serialize(object) or one of
+            This method is purely an internal method. Please use sy.serialize(object) or one of
             the other public serialization methods if you wish to serialize an
             object.
         """
 
         return RunClassMethodAction_PB(
             path=self.path,
-            _self=serialize(self._self, to_bytes=True),
-            args=list(map(lambda x: serialize(x, to_bytes=True), self.args)),
-            kwargs={k: serialize(v, to_bytes=True) for k, v in self.kwargs.items()},
-            id_at_location=serialize(self.id_at_location),
-            address=serialize(self.address),
-            msg_id=serialize(self.id),
+            _self=sy.serialize(self._self, to_bytes=True),
+            args=list(map(lambda x: sy.serialize(x, to_bytes=True), self.args)),
+            kwargs={k: sy.serialize(v, to_bytes=True) for k, v in self.kwargs.items()},
+            id_at_location=sy.serialize(self.id_at_location),
+            address=sy.serialize(self.address),
+            msg_id=sy.serialize(self.id),
         )
 
     @staticmethod
@@ -288,15 +311,17 @@ class RunClassMethodAction(ImmediateActionWithoutReply):
 
         return RunClassMethodAction(
             path=proto.path,
-            _self=_deserialize(blob=proto._self, from_bytes=True),
-            args=list(map(lambda x: _deserialize(blob=x, from_bytes=True), proto.args)),
+            _self=sy.deserialize(blob=proto._self, from_bytes=True),
+            args=list(
+                map(lambda x: sy.deserialize(blob=x, from_bytes=True), proto.args)
+            ),
             kwargs={
-                k: _deserialize(blob=v, from_bytes=True)
+                k: sy.deserialize(blob=v, from_bytes=True)
                 for k, v in proto.kwargs.items()
             },
-            id_at_location=_deserialize(blob=proto.id_at_location),
-            address=_deserialize(blob=proto.address),
-            msg_id=_deserialize(blob=proto.msg_id),
+            id_at_location=sy.deserialize(blob=proto.id_at_location),
+            address=sy.deserialize(blob=proto.address),
+            msg_id=sy.deserialize(blob=proto.msg_id),
         )
 
     @staticmethod

@@ -171,3 +171,11 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# helmcharts
+helm-charts/**/*.tgz
+helm-charts/**/*.lock
+.helm/**
+
+# docker cache
+.docker-cache/

@@ -9,13 +9,11 @@ from typing import Type
 # third party
 from pandas import DataFrame
 
-# syft absolute
-from syft.core.node.abstract.node import AbstractNodeClient
-
 # relative
 from ....common.message import SyftMessage
-from ....node.common.action.exception_action import ExceptionMessage
-from ....node.domain.enums import RequestAPIFields
+from ...abstract.node import AbstractNodeClient
+from ...domain.enums import RequestAPIFields
+from ..action.exception_action import ExceptionMessage
 
 
 class RequestAPI:
@@ -60,7 +58,7 @@ class RequestAPI:
             content
             for content in self.perform_api_request(
                 syft_msg=self.__get_all_message
-            ).metadatas
+            ).content
         ]
 
         return result
